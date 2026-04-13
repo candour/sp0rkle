@@ -8,11 +8,29 @@ This guide is intended for humans (and AI agents who have been tasked with its m
 
 sp0rkle follows a modular "driver-based" architecture. The core handles the IRC connection, while features are implemented as independent drivers.
 
-- **`bot/`**: The Brains. Manages command sets, line rewriters, and background pollers. If you change this, you might break everything.
-- **`db/`**: The "Long Slog" Layer. This package handles the dual-writing logic for the MongoDB-to-BoltDB migration. It's designed to keep both databases in sync until we can finally delete the Mongo code and throw a party.
-- **`drivers/`**: The Heart of Features. Each directory here (e.g., `factdriver`, `karmadriver`) is a self-contained feature.
-- **`collections/`**: The Data Layer. High-level abstractions for specific data types (factoids, karma, quotes) built on top of the `db` package.
-- **`util/`**: The Wizardry. Lexing, string manipulation, and time formatting.
+### Directory Structure
+
+- **`bot/`**: The Brains. Manages the bot's core state, command sets, line rewriters, and background pollers. If you change this, you might break everything.
+- **`collections/`**: The Data Layer. High-level, typesafe abstractions for specific data types (factoids, karma, quotes) built on top of the `db` package.
+- **`db/`**: The "Long Slog" Layer. This package handles the dual-writing logic for the MongoDB-to-BoltDB migration. It's designed to keep both databases in sync until we can finally delete the Mongo code.
+- **`drivers/`**: The Heart of Features. Each directory here (e.g., `drivers/factdriver/`, `drivers/karmadriver/`) is a self-contained feature driver.
+- **`util/`**: The Wizardry. General-purpose helper functions for lexing, string manipulation, time formatting, and some ancillary binaries.
+
+### Events and Drivers
+
+sp0rkle is an event-based bot. The core uses `goirc/client` to handle IRC protocol events, which are then translated into bot-specific events in `bot/handlers.go`.
+
+Drivers are the primary abstraction for adding functionality. They register event handlers and commands during their initialization.
+
+- **`bot.BotHandler`**: A function type `func(*Context)` that processes bot events.
+- **Commands**: Registered via `bot.Command(handler, prefix, help)`.
+- **Raw Handlers**: Registered via `bot.Handle(handler, events...)`.
+
+### Rewriters (the new "Plugins")
+
+The legacy "plugin" system from the Wiki has been largely subsumed by **Rewriters**. These allow drivers to modify outgoing text before it is sent to IRC.
+
+- **`bot.Rewrite(handler)`**: Registers a function `func(string, *Context) string` to transform outgoing messages (e.g., replacing `$nick` with the user's name).
 
 ## 2. Developing New Features (Drivers)
 
@@ -68,7 +86,8 @@ Look at existing collections like `collections/factoids/` to see how to wrap the
 Tests live alongside the code in `_test.go` files. Since we don't like complex integration tests, we focus on testing the handler logic or utility functions.
 
 ### How to Test a Handler (The Lazy Way)
-You don't need a real IRC server. Just mock the `bot.Context`.
+
+You don't need a real IRC server. Just mock the `bot.Context`. Ensure you add unit tests for **positive paths**, **negative paths** (error handling), and **edge cases**.
 
 ```go
 func TestMyFeature(t *testing.T) {
@@ -95,16 +114,20 @@ See `drivers/factdriver/plugin_test.go` for real-world examples of exercising lo
 
 ## 5. Pro-Tips and Pitfalls
 
-- **The Global `bot`**: The `bot` package uses a global singleton. It's not "modern Go," but it works. Just be careful with state.
+- **The Global `bot`**: The `bot` package uses a global singleton. It's not "modern Go," but it works.
+    - **How to be careful**: Access to the global bot state is protected by a mutex, but your drivers might not be. Use your own locks for shared driver state.
+    - **Test Isolation**: Because of the singleton, tests can leak state. Always reset or mock the necessary bot state in `TestMain` or at the start of individual tests.
+    - **No Dependency Injection**: You can't easily swap the bot out. Mock the `bot.Context` instead to test your handlers.
 - **Data Loss (The Mongo Curse)**: We hate MongoDB. That's why we're migrating. If you find a data mismatch between Mongo and Bolt, the `db.Both` layer will log a warning. Listen to it.
 - **Regex is Your Friend (and Enemy)**: Much of sp0rkle's parsing relies on regex. Use `util/lexer.go` if you want to parse complex strings without descending into madness.
-- **Pollers**: If your feature needs to do something periodically (like checking an RSS feed), use `bot.Poll(myPoller)`.
+- **Pollers**: If your feature needs to do something periodically (like checking an RSS feed), you *could* use `bot.Poll(myPoller)`.
+    - **Warning**: Pollers are architecturally flawed. They are tightly coupled to the connection lifecycle and can't be started/stopped arbitrarily. We don't recommend using them in their current state.
 
 ## 6. Development Environment
 
 1. Install Go and MongoDB (if you must).
 2. Run `go build` in the root.
 3. Run the bot: `./sp0rkle --servers irc.yournet.org --nick mybot --channels "#test"`.
-4. If you need a database backup, see `backup.sh`. If you lose your data because you didn't have a backup... well, that's the sp0rkle way.
+4. If you need a database backup, see `backup.sh`. Note: sp0rkle has not lost data in >20 years, but don't tempt fate.
 
 Happy Hacking!
